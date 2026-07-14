@@ -153,7 +153,7 @@ async function dispatchGmailMessage(
       // Archive thread after dispatch completes (whether agent replied or not).
       // This ensures "no reply" emails also leave the inbox, matching the
       // archiveOnReply behavior for emails that do get a reply.
-      const gmailAcctCfg = ((cfg.channels?.["openclaw-gmail"] as unknown) as GmailConfig | undefined)?.accounts?.[account.email];
+      const gmailAcctCfg = ((cfg.channels?.["openclaw-gmail"] as any)?.accounts?.[account.email]) as any;
       const gmailDefaults = ((cfg.channels?.["openclaw-gmail"] as unknown) as GmailConfig | undefined)?.defaults;
       const shouldArchive = gmailAcctCfg?.archiveOnReply
         ?? (gmailDefaults as any)?.archiveOnReply
@@ -231,7 +231,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
   },
   config: {
     listAccountIds: (cfg) => listGmailAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveGmailAccount(cfg, accountId),
+    resolveAccount: (cfg, accountId) => resolveGmailAccount(cfg, accountId ?? undefined),
     defaultAccountId: (cfg) => resolveDefaultGmailAccountId(cfg),
     isEnabled: (account) => Boolean(account.enabled),
     describeAccount: (account) => ({
@@ -438,8 +438,8 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
           await dispatchGmailMessage(ctx, msg, client);
         },
         signal,
-        log: ctx.log,
-        setStatus: ctx.setStatus,
+        log: ctx.log!,
+        setStatus: ctx.setStatus!,
         client,
       }).catch((err) => {
         if (!signal.aborted) {

@@ -1,6 +1,5 @@
 import { marked } from "marked";
 import sanitizeHtml from "sanitize-html";
-import { type ChannelOutboundContext } from "openclaw/plugin-sdk/core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { resolveGmailAccount } from "./accounts.js";
 import { isGmailThreadId } from "./normalize.js";

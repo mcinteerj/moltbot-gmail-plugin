@@ -166,7 +166,7 @@ async function enrichWithThreadContext(
  * Prune old Gmail sessions and their associated attachments.
  */
 async function pruneGmailSessions(account: ResolvedGmailAccount, log: ChannelLogSink) {
-  const ttlMs = account.sessionTtlDays * 24 * 60 * 60 * 1000;
+  const ttlMs = (account.sessionTtlDays ?? 30) * 24 * 60 * 60 * 1000;
   const stateDir = path.join(os.homedir(), ".clawdbot", "agents", "main", "sessions");
   const storePath = path.join(stateDir, "sessions.json");
 
@@ -277,7 +277,7 @@ async function downloadAttachmentsIfSmall(
     const downloaded: string[] = [];
 
     const agentDir = process.env.CLAWDBOT_AGENT_DIR || path.join(os.homedir(), "keith");
-    const threadAttachmentsDir = path.join(agentDir, ".attachments", msg.threadId);
+    const threadAttachmentsDir = path.join(agentDir, ".attachments", msg.threadId ?? "");
 
     for (const att of attachments) {
         if (att.size <= MAX_AUTO_DOWNLOAD_SIZE) {
@@ -336,9 +336,9 @@ async function performFullSync(
 
   const threads = new Map<string, InboundMessage[]>();
   for (const msg of inboundMessages) {
-    const list = threads.get(msg.threadId) || [];
+    const list = threads.get(msg.threadId ?? "") || [];
     list.push(msg);
-    threads.set(msg.threadId, list);
+    threads.set(msg.threadId ?? "", list);
   }
 
      for (const [threadId, messages] of threads) {
@@ -446,7 +446,7 @@ export async function monitorGmail(params: {
       // We rely on the "UNREAD" label as our queue state.
       isSyncing = true;
       try {
-        log.debug("Performing full search sync...");
+        log.debug?.("Performing full search sync...");
         await performFullSync(account, onMessage, signal, log, client);
         setStatus({ accountId: account.accountId, running: true, connected: true, lastError: undefined });
       } finally {
