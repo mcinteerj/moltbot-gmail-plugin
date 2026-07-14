@@ -1,11 +1,57 @@
 {
   "id": "openclaw-gmail",
-  "channels": [
-    "openclaw-gmail"
-  ],
+  "channels": ["openclaw-gmail"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {}
+  },
+  "channelConfigs": {
+    "openclaw-gmail": {
+      "label": "Gmail",
+      "description": "Gmail integration via direct API or gog CLI.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean", "default": true },
+          "blockStreaming": { "type": "boolean", "default": false },
+          "accounts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean", "default": true },
+                "email": { "type": "string" },
+                "name": { "type": "string" },
+                "allowFrom": { "type": "array", "items": { "type": "string" } },
+                "historyId": { "type": "string" },
+                "delegate": { "type": "string" },
+                "archiveOnReply": { "type": "boolean", "default": true },
+                "includeThreadContext": { "type": "boolean", "default": false },
+                "backend": { "type": "string", "enum": ["gog", "api"] },
+                "oauth": {
+                  "type": "object",
+                  "properties": {
+                    "clientId": { "type": "string" },
+                    "clientSecret": { "type": "string" },
+                    "refreshToken": { "type": "string" }
+                  },
+                  "required": ["clientId", "clientSecret", "refreshToken"]
+                }
+              },
+              "required": ["email"]
+            }
+          },
+          "defaults": {
+            "type": "object",
+            "properties": {
+              "allowFrom": { "type": "array", "items": { "type": "string" } },
+              "archiveOnReply": { "type": "boolean", "default": true },
+              "includeThreadContext": { "type": "boolean", "default": false }
+            }
+          }
+        }
+      }
+    }
   }
 }
