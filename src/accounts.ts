@@ -1,14 +1,15 @@
-import {
-  type ChannelConfig,
-  type ResolvedChannelAccount,
-  DEFAULT_ACCOUNT_ID,
-} from "openclaw/plugin-sdk";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import type { GmailConfig } from "./config.js";
 
-export interface ResolvedGmailAccount extends ResolvedChannelAccount {
+export interface ResolvedGmailAccount {
+  accountId: string;
+  name?: string;
+  enabled?: boolean;
   email: string;
   historyId?: string;
   delegate?: string;
+  allowFrom: string[];
   pollIntervalMs?: number;
   includeThreadContext?: boolean;
   backend?: "gog" | "api";
@@ -17,6 +18,8 @@ export interface ResolvedGmailAccount extends ResolvedChannelAccount {
     clientSecret: string;
     refreshToken: string;
   };
+  /** Session + attachment TTL in days (used by the monitor's pruning). */
+  sessionTtlDays?: number;
 }
 
 /**
@@ -29,11 +32,13 @@ function canonicalizeKey(value: string): string {
 }
 
 export function resolveGmailAccount(
-  cfg: ChannelConfig<GmailConfig>,
+  cfg: OpenClawConfig,
   accountId?: string,
 ): ResolvedGmailAccount {
   const resolvedId = accountId || DEFAULT_ACCOUNT_ID;
-  const accounts = cfg.channels?.['openclaw-gmail']?.accounts;
+  const accounts = cfg.channels?.["openclaw-gmail"]?.accounts as
+    | Record<string, GmailAccountLike>
+    | undefined;
   let account = accounts?.[resolvedId];
 
   // If direct lookup fails, try matching against canonicalized account keys.
@@ -53,18 +58,19 @@ export function resolveGmailAccount(
   if (!account) {
     // Graceful fallback for UI logic that queries 'default' on unconfigured channels
     return {
-        accountId: resolvedId,
-        name: resolvedId,
-        enabled: false,
-        email: "",
-        historyId: undefined,
-        delegate: undefined,
-        allowFrom: [],
-        pollIntervalMs: undefined,
+      accountId: resolvedId,
+      name: resolvedId,
+      enabled: false,
+      email: "",
+      historyId: undefined,
+      delegate: undefined,
+      allowFrom: [],
+      pollIntervalMs: undefined,
+      sessionTtlDays: 30,
     };
   }
 
-  const defaults = cfg.channels?.['openclaw-gmail']?.defaults;
+  const defaults = (cfg.channels?.["openclaw-gmail"] as GmailConfig | undefined)?.defaults;
 
   return {
     accountId: resolvedId,
@@ -75,17 +81,35 @@ export function resolveGmailAccount(
     delegate: account.delegate,
     allowFrom: account.allowFrom,
     pollIntervalMs: account.pollIntervalMs,
-    includeThreadContext: account.includeThreadContext ?? (defaults as any)?.includeThreadContext ?? false,
+    includeThreadContext:
+      account.includeThreadContext ?? (defaults as any)?.includeThreadContext ?? false,
     backend: account.backend,
     oauth: account.oauth,
+    sessionTtlDays: 30,
   };
 }
 
-export function listGmailAccountIds(cfg: ChannelConfig<GmailConfig>): string[] {
-  return Object.keys(cfg.channels?.['openclaw-gmail']?.accounts || {});
+type GmailAccountLike = {
+  name?: string;
+  email: string;
+  enabled?: boolean;
+  historyId?: string;
+  delegate?: string;
+  allowFrom: string[];
+  pollIntervalMs?: number;
+  includeThreadContext?: boolean;
+  backend?: "gog" | "api";
+  oauth?: { clientId: string; clientSecret: string; refreshToken: string };
+};
+
+export function listGmailAccountIds(cfg: OpenClawConfig): string[] {
+  const accounts = (cfg.channels?.["openclaw-gmail"] as
+    | { accounts?: Record<string, unknown> }
+    | undefined)?.accounts;
+  return Object.keys(accounts || {});
 }
 
-export function resolveDefaultGmailAccountId(cfg: ChannelConfig<GmailConfig>): string {
+export function resolveDefaultGmailAccountId(cfg: OpenClawConfig): string {
   const ids = listGmailAccountIds(cfg);
   if (ids.length === 0) return DEFAULT_ACCOUNT_ID;
   if (ids.includes(DEFAULT_ACCOUNT_ID)) return DEFAULT_ACCOUNT_ID;

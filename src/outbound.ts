@@ -1,24 +1,43 @@
 import { marked } from "marked";
 import sanitizeHtml from "sanitize-html";
-import { type OutboundContext, type OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { resolveGmailAccount } from "./accounts.js";
 import { isGmailThreadId } from "./normalize.js";
 import { fetchQuotedContext, type QuotedContent } from "./quoting.js";
 import { validateThreadReply, isEmailAllowed } from "./outbound-check.js";
-import type { GmailConfig } from "./config.js";
+import type { GmailConfig, GmailAccount } from "./config.js";
 import type { GmailClient } from "./gmail-client.js";
 
-export interface GmailOutboundContext extends OutboundContext {
-  subject?: string;
-  threadId?: string;
+/**
+ * Context passed to sendGmailText. Mirrors the fields we use from the
+ * SDK's ChannelOutboundContext (2026.6.x) plus our GmailClient.
+ */
+export interface GmailOutboundContext {
+  cfg: OpenClawConfig;
+  to: string;
+  text: string;
+  accountId?: string;
+  threadId?: string | number;
   replyToId?: string;
+  subject?: string;
+  mediaUrl?: string;
   client: GmailClient;
 }
 
 export async function sendGmailText(ctx: GmailOutboundContext) {
-  const { to, text, accountId, cfg, threadId, replyToId, subject: explicitSubject, client } = ctx;
+  const {
+    to,
+    text,
+    accountId,
+    cfg,
+    threadId,
+    replyToId,
+    subject: explicitSubject,
+    client,
+  } = ctx;
   const account = resolveGmailAccount(cfg, accountId);
-  const gmailCfg = cfg.channels?.["openclaw-gmail"] as GmailConfig | undefined;
+  const gmailCfg = cfg.channels?.["openclaw-gmail"] as unknown as GmailConfig | undefined;
+  const accountCfg = gmailCfg?.accounts?.[accountId || "default"] as GmailAccount | undefined;
 
   // Validate we have a target - prioritize threadId if it's valid
   const effectiveThreadId = isGmailThreadId(String(threadId)) ? String(threadId) : undefined;
@@ -29,7 +48,6 @@ export async function sendGmailText(ctx: GmailOutboundContext) {
   }
 
   // Determine if quoted replies are enabled (default: true)
-  const accountCfg = gmailCfg?.accounts?.[accountId || "default"];
   const includeQuotedReplies = accountCfg?.includeQuotedReplies
     ?? gmailCfg?.defaults?.includeQuotedReplies
     ?? true;
@@ -78,14 +96,14 @@ export async function sendGmailText(ctx: GmailOutboundContext) {
       throw new Error(
         `Thread reply blocked by policy (${threadReplyPolicy}): ${validation.reason}. ` +
         `Blocked recipients: ${blockedList}. ` +
-        `Add them to allowOutboundTo or change threadReplyPolicy to "open".`
+        `Add them to allowOutboundTo or change threadReplyPolicy to "open".`,
       );
     }
   } else if (!isThread && allowOutboundTo.length > 0) {
     // Direct email: check allowOutboundTo
     if (!isEmailAllowed(toValue, allowOutboundTo)) {
       throw new Error(
-        `Direct email to ${toValue} blocked: not in allowOutboundTo list.`
+        `Direct email to ${toValue} blocked: not in allowOutboundTo list.`,
       );
     }
   }
@@ -111,11 +129,11 @@ export async function sendGmailText(ctx: GmailOutboundContext) {
   try {
     const rawHtml = await marked.parse(text);
     const replyHtml = sanitizeHtml(rawHtml, {
-      allowedTags: sanitizeHtml.defaults.allowedTags.concat(['img']),
+      allowedTags: sanitizeHtml.defaults.allowedTags.concat(["img"]),
       allowedAttributes: {
         ...sanitizeHtml.defaults.allowedAttributes,
-        '*': ['style', 'class']
-      }
+        "*": ["style", "class"],
+      },
     });
 
     // Build Gmail-style blockquote HTML for the quoted content

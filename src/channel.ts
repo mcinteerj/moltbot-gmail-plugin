@@ -1,26 +1,25 @@
 import {
-  buildChannelConfigSchema,
-  getChatChannelMeta,
   type ChannelPlugin,
-  missingTargetError,
-  setAccountEnabledInConfigSection,
-  deleteAccountFromConfigSection,
-  type InboundMessage,
   type OpenClawConfig,
   type ChannelGatewayContext,
-  type MsgContext,
 } from "openclaw/plugin-sdk";
-import { GmailConfigSchema, type GmailConfig } from "./config.js";
+import {
+  setAccountEnabledInConfigSection,
+  deleteAccountFromConfigSection,
+} from "openclaw/plugin-sdk/core";
+import { missingTargetError } from "openclaw/plugin-sdk/channel-feedback";
+import { type GmailConfig } from "./config.js";
 import {
   resolveGmailAccount,
   resolveDefaultGmailAccountId,
   listGmailAccountIds,
   type ResolvedGmailAccount,
 } from "./accounts.js";
+import type { InboundMessage } from "./types.js";
 import { setGmailRuntime, getGmailRuntime } from "./runtime.js";
 import { sendGmailText, type GmailOutboundContext } from "./outbound.js";
 import { gmailThreading } from "./threading.js";
-import { normalizeGmailTarget, isGmailThreadId, isAllowed } from "./normalize.js";
+import { normalizeGmailTarget, isGmailThreadId } from "./normalize.js";
 import { monitorGmail } from "./monitor.js";
 import { Semaphore } from "./semaphore.js";
 import { createGmailClient, type GmailClient } from "./gmail-client.js";
@@ -54,7 +53,7 @@ function buildGmailMsgContext(
   msg: InboundMessage,
   account: ResolvedGmailAccount,
   cfg: OpenClawConfig,
-): MsgContext {
+) {
   const runtime = getGmailRuntime();
   const to = `gmail:${account.email}`;
   const threadLabel = `Gmail thread ${msg.threadId}`;
@@ -85,7 +84,7 @@ function buildGmailMsgContext(
     CommandAuthorized: false,
     OriginatingChannel: "openclaw-gmail" as const,
     OriginatingTo: msg.threadId,
-  });
+  } as any);
 
   return ctx;
 }
@@ -105,10 +104,10 @@ async function dispatchGmailMessage(
 
       // Build the dispatch context
       const ctxPayload = buildGmailMsgContext(msg, account, cfg);
-      const gmailCfg = cfg.channels?.["openclaw-gmail"] as GmailConfig | undefined;
+      const gmailCfg = (cfg.channels?.["openclaw-gmail"] as unknown) as GmailConfig | undefined;
 
       // Build reply dispatcher options using gateway's reply capability
-      const deliver = async (payload: { text: string }) => {
+      const deliver = async (payload: any) => {
         const originalSubject = msg.raw?.subject ||
                                msg.raw?.headers?.subject ||
                                msg.raw?.payload?.headers?.find((h: any) => h.name.toLowerCase() === "subject")?.value;
@@ -119,7 +118,7 @@ async function dispatchGmailMessage(
 
         await sendGmailText({
           to: msg.threadId || msg.sender.id,
-          text: payload.text,
+          text: (payload?.text as string) ?? "",
           accountId,
           cfg,
           threadId: msg.threadId,
@@ -133,7 +132,7 @@ async function dispatchGmailMessage(
 
       // Dispatch to agent
       await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-        ctx: ctxPayload,
+        ctx: ctxPayload as any,
         cfg,
         dispatcherOptions: {
           deliver,
@@ -154,8 +153,8 @@ async function dispatchGmailMessage(
       // Archive thread after dispatch completes (whether agent replied or not).
       // This ensures "no reply" emails also leave the inbox, matching the
       // archiveOnReply behavior for emails that do get a reply.
-      const gmailAcctCfg = (cfg.channels?.["openclaw-gmail"] as GmailConfig | undefined)?.accounts?.[account.email];
-      const gmailDefaults = (cfg.channels?.["openclaw-gmail"] as GmailConfig | undefined)?.defaults;
+      const gmailAcctCfg = ((cfg.channels?.["openclaw-gmail"] as any)?.accounts?.[account.email]) as any;
+      const gmailDefaults = ((cfg.channels?.["openclaw-gmail"] as unknown) as GmailConfig | undefined)?.defaults;
       const shouldArchive = gmailAcctCfg?.archiveOnReply
         ?? (gmailDefaults as any)?.archiveOnReply
         ?? true;
@@ -170,11 +169,12 @@ async function dispatchGmailMessage(
   });
 }
 
-import { gmailOnboardingAdapter } from "./onboarding.js";
+import { gmailSetupAdapter, gmailSetupWizard } from "./onboarding.js";
 
 export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
   id: "openclaw-gmail",
-  onboarding: gmailOnboardingAdapter,
+  setup: gmailSetupAdapter,
+  setupWizard: gmailSetupWizard,
   meta: {
     ...meta,
     id: "openclaw-gmail",
@@ -232,9 +232,9 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
   },
   config: {
     listAccountIds: (cfg) => listGmailAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveGmailAccount(cfg, accountId),
+    resolveAccount: (cfg, accountId) => resolveGmailAccount(cfg, accountId ?? undefined),
     defaultAccountId: (cfg) => resolveDefaultGmailAccountId(cfg),
-    isEnabled: (account) => account.enabled,
+    isEnabled: (account) => Boolean(account.enabled),
     describeAccount: (account) => ({
       accountId: account.accountId,
       name: account.name || account.email,
@@ -265,18 +265,36 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
   outbound: {
     deliveryMode: "gateway",
     textChunkLimit: 8000,
-    sendText: (ctx: any) => {
-      const account = resolveGmailAccount(ctx.cfg, ctx.accountId);
+    sendFormattedText: async (ctx) => {
+      const account = resolveGmailAccount(ctx.cfg, ctx.accountId ?? undefined);
       const emailKey = account.email?.toLowerCase();
       const client = (emailKey && activeClients.get(emailKey)) || createGmailClient(account, ctx.cfg);
-      return sendGmailText({ ...ctx, client });
+      const result = await sendGmailText({
+        to: ctx.to,
+        text: ctx.text,
+        accountId: ctx.accountId ?? undefined,
+        cfg: ctx.cfg,
+        threadId: ctx.threadId != null ? String(ctx.threadId) : undefined,
+        replyToId: ctx.replyToId ?? undefined,
+        client,
+      });
+      return [result as any];
     },
-    sendMedia: (ctx: any) => {
-      const account = resolveGmailAccount(ctx.cfg, ctx.accountId);
+    sendFormattedMedia: async (ctx) => {
+      const account = resolveGmailAccount(ctx.cfg, ctx.accountId ?? undefined);
       const emailKey = account.email?.toLowerCase();
       const client = (emailKey && activeClients.get(emailKey)) || createGmailClient(account, ctx.cfg);
       const text = [ctx.text, ctx.mediaUrl].filter(Boolean).join("\n\n");
-      return sendGmailText({ ...ctx, text, client });
+      const result = await sendGmailText({
+        to: ctx.to,
+        text,
+        accountId: ctx.accountId ?? undefined,
+        cfg: ctx.cfg,
+        threadId: ctx.threadId != null ? String(ctx.threadId) : undefined,
+        replyToId: ctx.replyToId ?? undefined,
+        client,
+      });
+      return result as any;
     },
     resolveTarget: ({ to, allowFrom }) => {
       const trimmed = to?.trim() ?? "";
@@ -300,14 +318,14 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
       if (allowed.includes("*")) {
         return { ok: true, to: normalized };
       }
-      
+
       if (allowed.length > 0) {
-        const isAllowed = allowed.some(entry => {
+        const isAllowed = allowed.some((entry) => {
           if (entry === normalized) return true;
           if (entry.startsWith("@") && normalized.endsWith(entry)) return true;
           return false;
         });
-        
+
         if (!isAllowed) {
           return { ok: false, error: new Error(`Recipient ${normalized} not in allowList`) };
         }
@@ -318,15 +336,15 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
   },
   threading: gmailThreading,
   messaging: {
-    normalizeTarget: normalizeGmailTarget,
+    normalizeTarget: (raw) => normalizeGmailTarget(raw) ?? undefined,
     targetResolver: {
       looksLikeId: (id) => normalizeGmailTarget(id) !== null,
       hint: "email or threadId",
     },
   },
   agentPrompt: {
-    messageToolHints: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) => {
-      const account = resolveGmailAccount(cfg, accountId);
+    messageToolHints: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string | null }) => {
+      const account = resolveGmailAccount(cfg, accountId ?? undefined);
       return [
         "### Channel Behavior",
         "- Email is an async channel—avoid narration or progress updates (each message becomes a separate email).",
@@ -339,7 +357,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
         "- Headings, tables, and code blocks are fully supported.",
         `- Sending as: ${account.email || "the configured Gmail account"}.`,
         "### Attachments",
-        "- **Location**: All attachments are stored in \`.attachments/{{threadId}}/\` relative to your workspace.",
+        "- **Location**: All attachments are stored in `.attachments/{{threadId}}/` relative to your workspace.",
         "- **Auto-Download**: Files under 5MB are already there. The message text contains their paths.",
         "- **Manual Download**: For larger files (listed with an ID), download them to that same folder.",
         ...(account.backend === "api"
@@ -349,13 +367,21 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
     },
   },
   actions: {
-    listActions: () => ["send"],
-    supportsAction: ({ action }: { action: string }) => action === "send",
-    handleAction: async (ctx: any) => {
-      if (ctx.action !== "send") return { ok: false, error: new Error(`Unsupported action: ${ctx.action}`) };
+    describeMessageTool: () => ({
+      actions: ["send"] as const,
+      capabilities: [],
+    }),
+    supportsAction: ({ action }) => action === "send",
+    handleAction: async (ctx) => {
+      if (ctx.action !== "send") {
+        return {
+          content: [{ type: "text", text: `Unsupported action: ${ctx.action}` }],
+          details: { ok: false },
+        };
+      }
 
       const { params, accountId, cfg, toolContext } = ctx;
-      const account = resolveGmailAccount(cfg, accountId);
+      const account = resolveGmailAccount(cfg, accountId ?? undefined);
       const emailKey = account.email?.toLowerCase();
       const client = (emailKey && activeClients.get(emailKey)) || createGmailClient(account, cfg);
 
@@ -367,13 +393,13 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
       let replyToId: string | undefined;
 
       if (isThread && toolContext?.currentThreadTs) {
-          replyToId = toolContext.currentThreadTs;
+        replyToId = toolContext.currentThreadTs;
       }
 
       await sendGmailText({
         to,
         text,
-        accountId,
+        accountId: accountId ?? undefined,
         cfg,
         threadId: isThread ? to : undefined,
         replyToId,
@@ -381,7 +407,10 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
         client,
       });
 
-      return { ok: true, content: [{ type: "text", text: "Message sent via Gmail." }] };
+      return {
+        content: [{ type: "text", text: "Message sent via Gmail." }],
+        details: { ok: true },
+      };
     },
   },
   gateway: {
@@ -410,8 +439,8 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
           await dispatchGmailMessage(ctx, msg, client);
         },
         signal,
-        log: ctx.log,
-        setStatus: ctx.setStatus,
+        log: ctx.log!,
+        setStatus: ctx.setStatus!,
         client,
       }).catch((err) => {
         if (!signal.aborted) {

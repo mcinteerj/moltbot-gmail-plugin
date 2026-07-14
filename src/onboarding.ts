@@ -1,5 +1,9 @@
-import type { OpenClawConfig, ChannelOnboardingAdapter } from "openclaw/plugin-sdk";
-import { promptAccountId } from "openclaw/plugin-sdk";
+import type {
+  ChannelSetupAdapter,
+  ChannelSetupWizardAdapter,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/setup";
+import { promptAccountId } from "openclaw/plugin-sdk/setup";
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import { listGmailAccountIds, resolveDefaultGmailAccountId } from "./accounts.js";
@@ -87,46 +91,45 @@ async function fetchApiDisplayName(
   }
 }
 
-export const gmailOnboardingAdapter: ChannelOnboardingAdapter = {
+function gmailSetupStatus(cfg: OpenClawConfig) {
+  const ids = listGmailAccountIds(cfg);
+  const configured = ids.length > 0;
+  const gmailConfig = (cfg.channels as any)?.["openclaw-gmail"] || {};
+  const accounts = gmailConfig.accounts || {};
+  const backends = new Set(
+    Object.values(accounts).map((a: any) => a.backend || "gog"),
+  );
+  let hint = "Gmail polling";
+  if (backends.size === 1) {
+    hint = backends.has("api") ? "Gmail API" : "gog CLI";
+  } else if (backends.size > 1) {
+    hint = "Gmail API + gog CLI";
+  }
+  return {
+    channel,
+    configured,
+    statusLines: [`Gmail: ${configured ? `${ids.length} accounts` : "not configured"}`],
+    selectionHint: hint,
+    quickstartScore: configured ? 1 : 5,
+  };
+}
+
+/**
+ * Interactive setup wizard for 2026.6.x.
+ *
+ * The old `ChannelOnboardingAdapter` was removed in this SDK version, so the
+ * original OAuth wizard is expressed here as a `ChannelSetupWizardAdapter`.
+ * Its `configure` hook still receives the same `cfg` + `prompter` +
+ * `accountOverrides` + `shouldPromptAccountIds` it always did, so the full
+ * gog-detection / browser-consent / API-credential flow is preserved.
+ */
+export const gmailSetupWizard: ChannelSetupWizardAdapter = {
   channel,
-  getStatus: async ({ cfg }: { cfg: OpenClawConfig }) => {
-    const ids = listGmailAccountIds(cfg);
-    const configured = ids.length > 0;
-    const gmailConfig = (cfg.channels as any)?.["openclaw-gmail"] || {};
-    const accounts = gmailConfig.accounts || {};
-    const backends = new Set(
-      Object.values(accounts).map((a: any) => a.backend || "gog"),
-    );
-    let hint = "Gmail polling";
-    if (backends.size === 1) {
-      hint = backends.has("api") ? "Gmail API" : "gog CLI";
-    } else if (backends.size > 1) {
-      hint = "Gmail API + gog CLI";
-    }
-    return {
-      channel,
-      configured,
-      statusLines: [`Gmail: ${configured ? `${ids.length} accounts` : "not configured"}`],
-      selectionHint: hint,
-      quickstartScore: configured ? 1 : 5,
-    };
-  },
-  configure: async ({
-    cfg,
-    prompter,
-    accountOverrides,
-    shouldPromptAccountIds,
-  }: {
-    cfg: OpenClawConfig;
-    prompter: {
-      text: (opts: { message: string; validate?: (val?: string) => string | undefined; initialValue?: string }) => Promise<string>;
-      confirm: (opts: { message: string; initialValue?: boolean }) => Promise<boolean>;
-      note: (message: string, title?: string) => Promise<void>;
-    };
-    accountOverrides: Record<string, string>;
-    shouldPromptAccountIds: boolean;
-  }) => {
-    // --- Account selection (unchanged) ---
+  getStatus: async ({ cfg }) => gmailSetupStatus(cfg),
+  configure: async (ctx) => {
+    const { cfg, prompter, accountOverrides, shouldPromptAccountIds } = ctx;
+
+    // --- Account selection (unchanged from the original wizard) ---
     const existingIds = listGmailAccountIds(cfg);
     const gmailOverride = (accountOverrides["openclaw-gmail"] ?? accountOverrides.gmail)?.trim();
     const defaultAccountId = resolveDefaultGmailAccountId(cfg);
@@ -175,7 +178,7 @@ export const gmailOnboardingAdapter: ChannelOnboardingAdapter = {
 
       await prompter.note(
         `Using existing API credentials for ${email}.`,
-        "OAuth Credentials"
+        "OAuth Credentials",
       );
 
       const reAuth = await prompter.confirm({
@@ -183,7 +186,7 @@ export const gmailOnboardingAdapter: ChannelOnboardingAdapter = {
         initialValue: false,
       });
       if (reAuth) {
-        refreshToken = await runOAuthFlow(clientId, clientSecret);
+        refreshToken = await runOAuthFlow(clientId!, clientSecret!);
       }
     } else if (gogInstalled && gogCreds) {
       // Scenario A/C: gog installed with credentials — offer migration
@@ -198,7 +201,7 @@ export const gmailOnboardingAdapter: ChannelOnboardingAdapter = {
         clientSecret = gogCreds.clientSecret;
         await prompter.note(
           "Reusing your gog OAuth client credentials.\nA browser window will open for one-time authorization.",
-          "API Migration"
+          "API Migration",
         );
         refreshToken = await runOAuthFlow(clientId, clientSecret);
       } else {
@@ -236,7 +239,7 @@ export const gmailOnboardingAdapter: ChannelOnboardingAdapter = {
             "3. Enable the Gmail API\n" +
             "4. Create OAuth 2.0 Client ID (type: Desktop app)\n" +
             "5. Copy the Client ID and Client Secret",
-            "GCP OAuth Setup"
+            "GCP OAuth Setup",
           );
 
           clientId = await prompter.text({
@@ -252,7 +255,7 @@ export const gmailOnboardingAdapter: ChannelOnboardingAdapter = {
 
       await prompter.note(
         "A browser window will open for Gmail authorization.",
-        "OAuth Flow"
+        "OAuth Flow",
       );
       refreshToken = await runOAuthFlow(clientId!, clientSecret!);
     }
@@ -263,7 +266,7 @@ export const gmailOnboardingAdapter: ChannelOnboardingAdapter = {
       if (version && !isVersionAtLeast(version, MIN_GOG_VERSION)) {
         await prompter.note(
           `Your gog version (${version}) is below the recommended ${MIN_GOG_VERSION}.\nSome features may not work correctly.`,
-          "Version Warning"
+          "Version Warning",
         );
       }
 
@@ -271,7 +274,7 @@ export const gmailOnboardingAdapter: ChannelOnboardingAdapter = {
       if (!isAuthed) {
         await prompter.note(
           `Gog CLI is not authorized for ${email}. We need to authorize it now.`,
-          "Authorization"
+          "Authorization",
         );
         const doAuth = await prompter.confirm({
           message: "Authorize gog now?",
@@ -298,7 +301,7 @@ export const gmailOnboardingAdapter: ChannelOnboardingAdapter = {
       validate: (val: string | undefined) => {
         const n = parseInt(val || "", 10);
         return isNaN(n) || n < 1 ? "Positive integer required" : undefined;
-      }
+      },
     });
     const pollIntervalMs = parseInt(pollIntervalSecsRaw, 10) * 1000;
 
@@ -343,7 +346,7 @@ export const gmailOnboardingAdapter: ChannelOnboardingAdapter = {
       },
     };
 
-    return { cfg: next, accountId: email };
+    return { cfg: next as OpenClawConfig, accountId: email };
   },
   disable: (cfg: OpenClawConfig) => ({
     ...cfg,
@@ -352,4 +355,48 @@ export const gmailOnboardingAdapter: ChannelOnboardingAdapter = {
       "openclaw-gmail": { ...(cfg.channels as any)?.["openclaw-gmail"], enabled: false },
     },
   }),
+};
+
+/**
+ * Minimal non-interactive setup adapter for scripted / fixed-input config
+ * application. Interactive OAuth still goes through `gmailSetupWizard`.
+ */
+export const gmailSetupAdapter: ChannelSetupAdapter = {
+  applyAccountConfig: ({ cfg, accountId, input }) => {
+    const channels = (cfg.channels ?? {}) as Record<string, any>;
+    const gmail = (channels[channel] ?? {}) as Record<string, any>;
+    const accounts = { ...(gmail.accounts ?? {}) } as Record<string, any>;
+    const existing = (accounts[accountId] ?? {}) as Record<string, any>;
+
+    const nextAccount: Record<string, any> = {
+      ...existing,
+      enabled: true,
+      email: (existing.email as string) || accountId,
+      name: (input.name as string | undefined) ?? (existing.name as string) ?? accountId,
+    };
+
+    // Best-effort: if a refresh token was supplied, record it. The OAuth
+    // clientId/clientSecret still need to be supplied via config (see note above).
+    if (input.token && !existing.oauth) {
+      nextAccount.oauth = {
+        clientId: (existing.oauth?.clientId as string) ?? "",
+        clientSecret: (existing.oauth?.clientSecret as string) ?? "",
+        refreshToken: input.token,
+      };
+    }
+
+    accounts[accountId] = nextAccount;
+
+    return {
+      ...cfg,
+      channels: {
+        ...channels,
+        [channel]: {
+          ...gmail,
+          enabled: true,
+          accounts,
+        },
+      },
+    };
+  },
 };
