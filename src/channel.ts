@@ -169,11 +169,12 @@ async function dispatchGmailMessage(
   });
 }
 
-import { gmailSetupAdapter } from "./onboarding.js";
+import { gmailSetupAdapter, gmailSetupWizard } from "./onboarding.js";
 
 export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
   id: "openclaw-gmail",
   setup: gmailSetupAdapter,
+  setupWizard: gmailSetupWizard,
   meta: {
     ...meta,
     id: "openclaw-gmail",
